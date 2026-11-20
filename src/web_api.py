@@ -294,6 +294,15 @@ async def _startup() -> None:
     asyncio.create_task(arena.warm_up())
 
 
+@app.middleware("http")
+async def require_token(request: Request, call_next):
+    """When ARENA_TOKEN is set the tunnel is public, so only the web app may call us."""
+    token = os.environ.get("ARENA_TOKEN", "").strip()
+    if token and request.headers.get("x-arena-token", "") != token:
+        return JSONResponse({"error": "Not authorized."}, status_code=401)
+    return await call_next(request)
+
+
 class AttackIn(BaseModel):
     target: str
     prompt: str = Field(max_length=MAX_PROMPT)

@@ -211,3 +211,6 @@ arena_data/
 web/node_modules/
 web/.next/
 web/tsconfig.tsbuildinfo
+
+# Next.js source folder (not a Python build artefact)
+!web/src/lib/
