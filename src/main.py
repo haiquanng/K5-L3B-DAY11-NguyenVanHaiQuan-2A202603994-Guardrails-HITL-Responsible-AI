@@ -27,9 +27,13 @@ if str(_SRC_DIR) not in sys.path:
 
 from core.config import BLUE_PROVIDER, setup_api_key
 
-# Blue gọi thẳng Liquid API mặc định (endpoint OpenRouter :free đang down).
-# Đổi lại: BLUE_PROVIDER=openrouter trong .env, hoặc --blue-provider openrouter.
-DEFAULT_BLUE_PROVIDER = os.environ.get("BLUE_PROVIDER", "liquid").strip().lower() or "liquid"
+# Chọn endpoint cho Blue: BLUE_PROVIDER trong .env nếu có; nếu không thì dùng Liquid
+# trực tiếp khi có LIQUID_API_KEY, còn lại dùng OpenRouter (mặc định của lab).
+# Có thể ép bằng cờ --blue-provider openrouter|liquid.
+DEFAULT_BLUE_PROVIDER = (
+    os.environ.get("BLUE_PROVIDER", "").strip().lower()
+    or ("liquid" if os.environ.get("LIQUID_API_KEY", "").strip() else BLUE_PROVIDER)
+)
 
 
 async def part2_guardrails():
