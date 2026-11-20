@@ -4,6 +4,9 @@ Checkpoint 2 — Output Guardrails
   - OutputGuardrailPlugin (ADK)           ← bắt buộc
   - LLM-as-Judge                          ← optional (không chấm)
 """
+import base64
+import binascii
+import codecs
 import re
 from agents.security_boundary import contains_secret, normalize_for_security
 
@@ -24,6 +27,31 @@ SENSITIVE_PATTERNS = {
 }
 
 
+_B64_TOKEN = re.compile(r"[A-Za-z0-9+/_-]{8,}={0,2}")
+_HEX_TOKEN = re.compile(r"(?:[0-9a-fA-F]{2}[\s:-]?){6,}")
+
+
+def _decoded_views(text: str) -> list[str]:
+    """Undo common disguises (reversed, ROT13, base64, hex) so the leak check sees them."""
+    views = [text, text[::-1], codecs.decode(text, "rot_13")]
+    for token in _B64_TOKEN.findall(text):
+        padded = token.replace("-", "+").replace("_", "/")
+        padded += "=" * (-len(padded) % 4)
+        try:
+            decoded = base64.b64decode(padded).decode("utf-8", errors="ignore")
+        except (binascii.Error, ValueError):
+            continue
+        views += [decoded, decoded[::-1]]
+    for token in _HEX_TOKEN.findall(text):
+        digits = re.sub(r"[^0-9a-fA-F]", "", token)
+        try:
+            decoded = bytes.fromhex(digits[: len(digits) - len(digits) % 2]).decode("utf-8", errors="ignore")
+        except ValueError:
+            continue
+        views += [decoded, decoded[::-1]]
+    return views
+
+
 def content_filter(response: str) -> dict:
     """Redact recognized values and suppress residual obfuscated lab secrets."""
     redacted = normalize_for_security(response)
@@ -32,7 +60,7 @@ def content_filter(response: str) -> dict:
         redacted, count = re.subn(pattern, "[REDACTED]", redacted, flags=re.I)
         if count:
             issues.append(kind)
-    if contains_secret(redacted):
+    if any(contains_secret(view) for view in _decoded_views(redacted)):
         issues.append("protected_data")
         redacted = "[REDACTED]"
     return {"safe": not issues, "issues": issues, "redacted": redacted if issues else response}

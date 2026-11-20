@@ -18,7 +18,11 @@ from google.genai import types
 from google.adk.plugins import base_plugin
 from google.adk.agents.invocation_context import InvocationContext
 
-from agents.security_boundary import contains_instruction_override, normalize_for_security
+from agents.security_boundary import (
+    contains_instruction_override,
+    contains_secret,
+    normalize_for_security,
+)
 from core.config import ALLOWED_TOPICS, BLOCKED_TOPICS
 
 # Quyết định rõ ràng — tránh đảo nghĩa True/False
@@ -38,6 +42,31 @@ def detect_injection(user_input: str) -> InputStatus:
     return "ALLOW"
 
 
+def _fold(text: str) -> str:
+    """Lowercase, strip Vietnamese diacritics and collapse whitespace."""
+    text = normalize_for_security(text).casefold().replace("đ", "d")
+    text = "".join(c for c in unicodedata.normalize("NFD", text) if not unicodedata.combining(c))
+    return " ".join(text.split())
+
+
+# Requests that target internal data rather than the customer's own account.
+# Plain "password"/"mật khẩu" is NOT here: customers legitimately ask to reset theirs.
+EXTRACTION = re.compile(
+    r"\badmin\b|\bpassphrase\b|\bapi\s*keys?\b|\b(?:access|api|auth|bearer)\s*tokens?\b|\bsk-"
+    r"|\bcredentials?\b|\bsecrets?\b|\binternal\s+notes?\b|\bnoi\s*bo\b|\bsystem\s+prompt\b"
+    r"|\bconfig(?:uration)?s?\b|\bcau\s*hinh\b|\bconnection\s+strings?\b|\bhost\s*names?\b"
+    r"|\b(?:database|db)\s+(?:hosts?|servers?|endpoints?|address|ports?)\b|\bkhoa\s*api\b"
+    r"|\bmay\s*chu\s+(?:co\s*so\s*)?du\s*lieu\b"
+)
+
+
+def detect_extraction(user_input: str) -> InputStatus:
+    """Block attempts to obtain internal data, incl. 'please confirm <secret>' messages."""
+    if contains_secret(user_input) or EXTRACTION.search(_fold(user_input)):
+        return "BLOCK"
+    return "ALLOW"
+
+
 def _topic_pattern(words):
     terms = "|".join(re.escape(word) for word in words)
     return re.compile(rf"\b(?:{terms})(?:s|es)?\b")
@@ -48,10 +77,7 @@ BLOCKED = _topic_pattern([*BLOCKED_TOPICS, "hacking", "stealing"])
 
 
 def topic_filter(user_input: str) -> InputStatus:
-    text = normalize_for_security(user_input).casefold().replace("đ", "d")
-    text = "".join(c for c in unicodedata.normalize("NFD", text)
-                   if not unicodedata.combining(c))
-    text = " ".join(text.split())
+    text = _fold(user_input)
     return "ALLOW" if ALLOWED.search(text) and not BLOCKED.search(text) else "BLOCK"
 
 
@@ -97,6 +123,11 @@ class InputGuardrailPlugin(base_plugin.BasePlugin):
         if detect_injection(text) == "BLOCK":
             self.blocked_count += 1
             return self._block_response("I cannot follow that instruction.")
+        if detect_extraction(text) == "BLOCK":
+            self.blocked_count += 1
+            return self._block_response(
+                "I can't share internal system details. I can help with your accounts, cards and loans."
+            )
         if topic_filter(text) == "BLOCK":
             self.blocked_count += 1
             return self._block_response("Please ask a banking question.")
