@@ -162,6 +162,18 @@ function load<T>(key: string, fallback: T): T {
     return fallback;
   }
 }
+/** Stable random id for this browser, so classmates behind one school IP get separate limits. */
+function browserId(): string {
+  let id = load<string>("arena.uid", "");
+  if (!id) {
+    id = typeof crypto !== "undefined" && "randomUUID" in crypto
+      ? crypto.randomUUID()
+      : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+    save("arena.uid", id);
+  }
+  return id;
+}
+
 function save(key: string, value: unknown) {
   try {
     localStorage.setItem(key, JSON.stringify(value));
@@ -239,7 +251,7 @@ export function Arena() {
     try {
       const res = await fetch("/api/arena/attack", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", "X-Arena-Uid": browserId() },
         body: JSON.stringify({ target, prompt: text, nickname }),
       });
       const data = await res.json();

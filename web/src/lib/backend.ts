@@ -47,6 +47,8 @@ export async function proxyBackend(
       signal: abort.signal,
       headers: {
         "X-Arena-Client": clientIp(request),
+        // Random per-browser id: a whole class often shares one school IP.
+        "X-Arena-Uid": (request.headers.get("x-arena-uid") ?? "").replace(/[^A-Za-z0-9-]/g, "").slice(0, 64),
         // Shared secret: the tunnel is public, so the backend only answers this app.
         ...(process.env.ARENA_TOKEN ? { "X-Arena-Token": process.env.ARENA_TOKEN } : {}),
         ...(method === "POST" ? { "Content-Type": "application/json" } : {}),

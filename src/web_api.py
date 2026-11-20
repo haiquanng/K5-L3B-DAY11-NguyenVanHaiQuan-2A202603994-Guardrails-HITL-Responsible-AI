@@ -41,6 +41,9 @@ PER_HOUR = int(os.environ.get("ARENA_PER_HOUR", "120"))
 # Sized for a class of ~60: enough in-flight calls to keep the queue short,
 # low enough to stay inside the Red/Blue provider rate limits.
 LLM_CONCURRENCY = int(os.environ.get("ARENA_CONCURRENCY", "16"))
+# A classroom usually shares ONE public IP (school NAT), so per-person limits key on
+# IP + a random browser id; this per-IP ceiling only stops one script flooding us.
+IP_PER_MINUTE = int(os.environ.get("ARENA_IP_PER_MINUTE", "150"))
 FEED_SIZE = 40
 
 BLUE_PROVIDER = os.environ.get("BLUE_PROVIDER", "liquid").strip().lower() or "liquid"
@@ -266,19 +269,23 @@ class Limiter:
     def __init__(self) -> None:
         self.hits: dict[str, deque[float]] = defaultdict(deque)
 
-    def check(self, client: str) -> int | None:
-        """Return seconds to wait, or None if allowed (and record the hit)."""
+    def wait(self, key: str, per_minute: int, per_hour: int | None = None) -> int | None:
+        """Seconds to wait if `key` is over its limits, else None (does not record)."""
         now = time.time()
-        q = self.hits[client]
+        q = self.hits[key]
         while q and now - q[0] > 3600:
             q.popleft()
         last_min = [t for t in q if now - t < 60]
-        if len(last_min) >= PER_MINUTE:
+        if len(last_min) >= per_minute:
             return int(60 - (now - last_min[0])) + 1
-        if len(q) >= PER_HOUR:
+        if per_hour is not None and len(q) >= per_hour:
             return int(3600 - (now - q[0])) + 1
-        q.append(now)
         return None
+
+    def record(self, *keys: str) -> None:
+        now = time.time()
+        for key in keys:
+            self.hits[key].append(now)
 
 
 # ---------------------------------------------------------------- app
@@ -309,9 +316,12 @@ class AttackIn(BaseModel):
     nickname: str = Field(default="", max_length=40)
 
 
-def _client_id(request: Request) -> str:
-    raw = request.headers.get("x-arena-client") or (request.client.host if request.client else "?")
-    return hashlib.sha256(raw.encode()).hexdigest()[:16]
+def _client_ids(request: Request) -> tuple[str, str]:
+    """(person, network): person = IP + browser id, network = IP only. Both hashed."""
+    ip = request.headers.get("x-arena-client") or (request.client.host if request.client else "?")
+    uid = re.sub(r"[^A-Za-z0-9-]", "", request.headers.get("x-arena-uid", ""))[:64]
+    digest = lambda raw: hashlib.sha256(raw.encode()).hexdigest()[:16]
+    return digest(f"{ip}|{uid}"), "net:" + digest(ip)
 
 
 def _clean_nick(nick: str) -> str:
@@ -359,9 +369,11 @@ async def attack(body: AttackIn, request: Request):
             msg = "Agent này đang lỗi, hãy chọn mục tiêu khác."
         return JSONResponse({"error": msg}, status_code=503)
 
-    client = _client_id(request)
-    wait = limiter.check(client)
-    if wait is not None:
+    client, network = _client_ids(request)
+    wait = limiter.wait(client, PER_MINUTE, PER_HOUR) or limiter.wait(network, IP_PER_MINUTE)
+    if wait is None:
+        limiter.record(client, network)
+    else:
         return JSONResponse(
             {"error": f"Bạn tấn công nhanh quá. Thử lại sau {wait} giây.", "retry_after": wait},
             status_code=429,
