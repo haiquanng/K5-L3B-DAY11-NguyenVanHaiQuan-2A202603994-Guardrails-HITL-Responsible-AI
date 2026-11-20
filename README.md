@@ -1,5 +1,30 @@
 # Day 11 — Controlled Agent Security (2026)
 
+## Thông tin bài nộp
+
+| | |
+|---|---|
+| Họ tên | Nguyễn Văn Hải Quân |
+| MSSV | 2A202603994 |
+| Lớp | K5-L3B |
+
+**Đã làm:** Checkpoint 1–5.
+- **Blue (CP2–3):** rate limit, lọc đầu vào (injection, xin dữ liệu nội bộ, chủ đề), lọc đầu ra (che PII/secret, giải mã đảo ngược/ROT13/base64/hex), audit log, monitoring. Chạy bằng Liquid `lfm3-1.7b` gọi trực tiếp, theo cho phép của giảng viên.
+- **Red (CP4):** 5 prompt tấn công. Red leak 5/5. Red Advance leak 0/5 (cả 5 bị chặn ở NeMo input rail). Bonus chọn **B1**.
+- **Thêm (không chấm):** Guardrail Arena, một web để cả lớp thử tấn công Blue/Red/Red Advance (`src/web_api.py` + `web/`, chạy bằng `scripts/arena.sh`).
+
+**Chạy lại** (cần `.env` với `LIQUID_API_KEY` và `OPENAI_API_KEY`, xem `.env.example`):
+
+```bash
+python -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt
+python src/main.py --part 3      # Blue  -> outputs/results.json, audit_log.json, metrics.json
+python src/main.py --part 4      # Red   -> outputs/attack_results.json (gọi LLM, ghi đè kết quả cũ)
+pytest tests/smoke tests/public -q
+python scripts/grade.py --submission-dir . --out outputs/grade_report.json
+```
+
+---
+
 > 👤 **Hình thức:** bài tập **cá nhân** (1 người / 1 MSSV).  
 > 🎯 **Mục tiêu:** đóng vai **Blue Team** để học cách xây Guardrails phòng thủ, rồi đóng vai **Red Team** để tấn công agent **Red** hoặc **Red Advance**.  
 > ✅ Làm theo **Checkpoint 1 → 5** trong [`CHECKPOINTS.md`](CHECKPOINTS.md) · nộp theo [`SUBMISSION.md`](SUBMISSION.md).

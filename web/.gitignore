@@ -6,3 +6,4 @@ out/
 !.env.example
 # Local PDF derivatives: regenerate from the authorized source, do not redistribute implicitly.
 public/documents/page-*.png
+.vercel
