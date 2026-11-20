@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import os
 import sys
 from pathlib import Path
 
@@ -25,6 +26,10 @@ if str(_SRC_DIR) not in sys.path:
     sys.path.insert(0, str(_SRC_DIR))
 
 from core.config import BLUE_PROVIDER, setup_api_key
+
+# Blue gọi thẳng Liquid API mặc định (endpoint OpenRouter :free đang down).
+# Đổi lại: BLUE_PROVIDER=openrouter trong .env, hoặc --blue-provider openrouter.
+DEFAULT_BLUE_PROVIDER = os.environ.get("BLUE_PROVIDER", "liquid").strip().lower() or "liquid"
 
 
 async def part2_guardrails():
@@ -51,7 +56,7 @@ async def part2_guardrails():
     print("(LLM-as-Judge / NeMo — optional, skipped)")
 
 
-async def part3_assignment_suite(blue_provider=BLUE_PROVIDER):
+async def part3_assignment_suite(blue_provider=DEFAULT_BLUE_PROVIDER):
     """Checkpoint 3: defense suite → outputs/results.json."""
     print("\n" + "=" * 60)
     print("CHECKPOINT 3: Assignment suite → outputs/*.json")
@@ -133,7 +138,7 @@ async def part4_attacks():
     }
 
 
-async def main(parts=None, *, blue_provider=BLUE_PROVIDER):
+async def main(parts=None, *, blue_provider=DEFAULT_BLUE_PROVIDER):
     if parts is None:
         parts = [2, 3, 4]  # Core: CP2 → CP3 → CP4
 
@@ -167,8 +172,8 @@ if __name__ == "__main__":
         choices=[2, 3, 4],
         help="2=CP2 guardrails · 3=CP3 suite · 4=CP4 red-team",
     )
-    parser.add_argument("--blue-provider", choices=("openrouter", "liquid"), default=BLUE_PROVIDER,
-                        help="Blue model endpoint (OpenRouter is required for grading)")
+    parser.add_argument("--blue-provider", choices=("openrouter", "liquid"), default=DEFAULT_BLUE_PROVIDER,
+                        help="Blue model endpoint (default: liquid direct; env BLUE_PROVIDER overrides)")
     args = parser.parse_args()
 
     if args.part:
