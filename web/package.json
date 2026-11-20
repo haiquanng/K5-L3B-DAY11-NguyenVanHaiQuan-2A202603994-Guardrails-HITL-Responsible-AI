@@ -1,0 +1,24 @@
+{
+  "name": "guardrail-arena",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev --hostname 127.0.0.1 --port 3011",
+    "build": "next build",
+    "start": "next start --hostname 127.0.0.1 --port 3011",
+    "typecheck": "tsc --noEmit",
+    "backend": "cd .. && .venv/bin/python src/web_api.py"
+  },
+  "dependencies": {
+    "lucide-react": "^1.71.0",
+    "next": "16.4.6",
+    "react": "19.3.0",
+    "react-dom": "19.3.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "typescript": "^5.9.3"
+  }
+}

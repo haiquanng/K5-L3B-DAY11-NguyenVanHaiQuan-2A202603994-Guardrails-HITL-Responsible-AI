@@ -207,3 +207,7 @@ marimo/_lsp/
 __marimo__/
 
 template-codelabs
+arena_data/
+web/node_modules/
+web/.next/
+web/tsconfig.tsbuildinfo
