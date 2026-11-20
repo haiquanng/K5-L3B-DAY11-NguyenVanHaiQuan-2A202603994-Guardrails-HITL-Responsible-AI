@@ -36,9 +36,11 @@ DATA_DIR = ROOT / "arena_data"
 ATTEMPTS_FILE = DATA_DIR / "attempts.jsonl"
 
 MAX_PROMPT = 3000
-PER_MINUTE = int(os.environ.get("ARENA_PER_MINUTE", "6"))
-PER_HOUR = int(os.environ.get("ARENA_PER_HOUR", "80"))
-LLM_CONCURRENCY = int(os.environ.get("ARENA_CONCURRENCY", "4"))
+PER_MINUTE = int(os.environ.get("ARENA_PER_MINUTE", "5"))
+PER_HOUR = int(os.environ.get("ARENA_PER_HOUR", "120"))
+# Sized for a class of ~60: enough in-flight calls to keep the queue short,
+# low enough to stay inside the Red/Blue provider rate limits.
+LLM_CONCURRENCY = int(os.environ.get("ARENA_CONCURRENCY", "16"))
 FEED_SIZE = 40
 
 BLUE_PROVIDER = os.environ.get("BLUE_PROVIDER", "liquid").strip().lower() or "liquid"
