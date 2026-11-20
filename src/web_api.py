@@ -203,6 +203,9 @@ class Store:
         self.feed: deque[dict] = deque(maxlen=FEED_SIZE)
         self.board: dict[str, dict] = {}
         self.totals = {"attempts": 0, "leaks": 0, **{f"leaks_{k}": 0 for k in TARGETS}}
+        # target -> outcome bucket (layer id, "leaked", "passed") -> count
+        self.outcomes: dict[str, dict[str, int]] = {k: defaultdict(int) for k in TARGETS}
+        self.per_target: dict[str, int] = {k: 0 for k in TARGETS}
         if ATTEMPTS_FILE.exists():
             for line in ATTEMPTS_FILE.read_text(encoding="utf-8").splitlines():
                 try:
@@ -213,6 +216,10 @@ class Store:
     def _apply(self, row: dict) -> None:
         self.feed.appendleft(row["public"])
         self.totals["attempts"] += 1
+        pub = row["public"]
+        bucket = "leaked" if pub["verdict"] == "leaked" else (pub.get("layer") or "passed")
+        self.outcomes[pub["target"]][bucket] += 1
+        self.per_target[pub["target"]] += 1
         nick = row["public"]["nickname"]
         entry = self.board.setdefault(
             nick,
@@ -322,6 +329,8 @@ async def feed() -> dict:
         "feed": list(store.feed),
         "leaderboard": store.leaderboard(),
         "totals": store.totals,
+        "outcomes": {k: dict(v) for k, v in store.outcomes.items()},
+        "per_target": store.per_target,
         "secrets": [{"id": t["id"], "label": t["label"]} for t in LEAK_TARGETS],
     }
 

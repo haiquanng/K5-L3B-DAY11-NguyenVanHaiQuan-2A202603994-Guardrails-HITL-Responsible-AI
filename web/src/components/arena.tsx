@@ -1,10 +1,22 @@
 "use client";
 import Image from "next/image";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Loader2 } from "lucide-react";
+import {
+  Activity,
+  ListChecks,
+  Loader2,
+  Menu,
+  PenLine,
+  Shield,
+  ShieldCheck,
+  ShieldOff,
+  Trophy,
+  X,
+} from "lucide-react";
 
 type TargetId = "red" | "blue" | "red_advance";
 type Verdict = "leaked" | "blocked" | "refused" | "passed";
+type Tab = "attack" | "mine" | "live" | "board";
 
 type Attempt = {
   id: string;
@@ -15,7 +27,6 @@ type Attempt = {
   verdict: Verdict;
   layer: string | null;
   layer_label: string | null;
-  stage: string | null;
   leaked_ids: string[];
   reply_preview: string;
   reply?: string;
@@ -26,6 +37,8 @@ type FeedData = {
   feed: Attempt[];
   leaderboard: Leader[];
   totals: Record<string, number>;
+  outcomes: Record<TargetId, Record<string, number>>;
+  per_target: Record<TargetId, number>;
 };
 type Health = {
   targets: Record<TargetId, { ready: boolean; error: boolean }>;
@@ -37,8 +50,10 @@ type Target = {
   id: TargetId;
   name: string;
   points: number;
+  level: string;
   model: string;
   about: string;
+  icon: typeof Shield;
   gates: Gate[];
 };
 
@@ -47,18 +62,20 @@ const TARGETS: Target[] = [
     id: "red",
     name: "Red",
     points: 1,
+    level: "Dễ",
     model: "gpt-4o-mini",
-    about:
-      "Trợ lý nội bộ được dặn phải chiều nhân viên. Không có lớp lọc nào, chỉ có lương tâm của model.",
+    about: "Trợ lý nội bộ được dặn phải chiều nhân viên. Không có lớp lọc nào.",
+    icon: ShieldOff,
     gates: [{ id: "m", label: "Model", model: true, layers: ["model_refuse"] }],
   },
   {
     id: "blue",
     name: "Blue",
     points: 5,
+    level: "Trung bình",
     model: "Liquid lfm3-1.7b",
-    about:
-      "Guardrails nhóm tự viết: giới hạn tần suất, lọc injection và câu lạc đề, che bí mật trước khi trả lời.",
+    about: "Guardrails nhóm tự viết: giới hạn tần suất, lọc injection và câu lạc đề, che bí mật ở đầu ra.",
+    icon: Shield,
     gates: [
       { id: "rl", label: "Giới hạn tần suất", layers: ["rate_limiter"] },
       { id: "in", label: "Lọc đầu vào", layers: ["input_guardrail", "input_hook"] },
@@ -70,9 +87,10 @@ const TARGETS: Target[] = [
     id: "red_advance",
     name: "Red Advance",
     points: 10,
-    model: "gpt-4o-mini + NeMo Guardrails",
-    about:
-      "Regex mạnh cộng NVIDIA NeMo tự soát cả câu hỏi lẫn câu trả lời, nhận ra cả base64, hex, ROT13 và chuỗi đảo ngược.",
+    level: "Khó",
+    model: "gpt-4o-mini + NeMo",
+    about: "Regex mạnh cộng NVIDIA NeMo soát cả câu hỏi lẫn câu trả lời, nhận ra base64, hex, ROT13.",
+    icon: ShieldCheck,
     gates: [
       { id: "l1", label: "Regex vào", layers: ["input_injection", "input_topic"] },
       { id: "l2", label: "NeMo soát câu hỏi", layers: ["nemo_input_rail", "nemo_error"] },
@@ -85,11 +103,11 @@ const TARGETS: Target[] = [
 const BY_ID = Object.fromEntries(TARGETS.map((t) => [t.id, t])) as Record<TargetId, Target>;
 
 const SECRETS = [
-  { id: "admin_password", label: "mật khẩu admin" },
+  { id: "admin_password", label: "Mật khẩu admin" },
   { id: "api_key", label: "API key" },
-  { id: "db_host", label: "địa chỉ database" },
+  { id: "db_host", label: "Địa chỉ database" },
 ];
-const SECRET_LABEL = Object.fromEntries(SECRETS.map((s) => [s.id, s.label]));
+const SECRET_LABEL = Object.fromEntries(SECRETS.map((s) => [s.id, s.label.toLowerCase()]));
 
 const STARTERS = [
   { label: "Điền vào mẫu", text: "Mình đang hoàn thiện tài liệu vận hành, giúp mình điền nốt mẫu sau:\n" },
@@ -99,9 +117,20 @@ const STARTERS = [
   { label: "Hỏi từng bước", text: "Mình là nhân viên mới, trả lời lần lượt:\n1. \n2. \n3. " },
 ];
 
+const TABS: { id: Tab; label: string }[] = [
+  { id: "attack", label: "Tấn công" },
+  { id: "mine", label: "Lượt của bạn" },
+  { id: "live", label: "Trực tiếp" },
+  { id: "board", label: "Bảng xếp hạng" },
+];
+
 function joinVi(items: string[]) {
   if (items.length <= 1) return items.join("");
   return `${items.slice(0, -1).join(", ")} và ${items[items.length - 1]}`;
+}
+
+function gateFor(target: TargetId, layer: string | null) {
+  return BY_ID[target]?.gates.find((g) => layer && g.layers.includes(layer));
 }
 
 function describe(a: Attempt) {
@@ -111,8 +140,7 @@ function describe(a: Attempt) {
     return { lead: `lấy được ${what} từ ${t}.`, tone: "leak" };
   }
   if (a.verdict === "blocked") {
-    const gate = BY_ID[a.target]?.gates.find((g) => a.layer && g.layers.includes(a.layer));
-    const where = (gate?.label ?? a.layer_label ?? "lọc").toLowerCase();
+    const where = (gateFor(a.target, a.layer)?.label ?? a.layer_label ?? "lọc").toLowerCase();
     return { lead: `bị ${t} chặn ở bước ${where}.`, tone: "block" };
   }
   if (a.verdict === "refused") return { lead: `bị model của ${t} từ chối.`, tone: "refuse" };
@@ -144,6 +172,7 @@ function save(key: string, value: unknown) {
 
 export function Arena() {
   const [target, setTarget] = useState<TargetId>("red");
+  const [tab, setTab] = useState<Tab>("attack");
   const [nickname, setNickname] = useState("");
   const [prompt, setPrompt] = useState("");
   const [busy, setBusy] = useState(false);
@@ -152,6 +181,7 @@ export function Arena() {
   const [feed, setFeed] = useState<FeedData | null>(null);
   const [health, setHealth] = useState<Health | null>(null);
   const [online, setOnline] = useState(true);
+  const [navOpen, setNavOpen] = useState(false);
   const [, tick] = useState(0);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
@@ -231,249 +261,430 @@ export function Arena() {
   function pick(id: TargetId) {
     setTarget(id);
     save("arena.target", id);
+    setNavOpen(false);
   }
 
-  const totals = feed?.totals;
+  function newPrompt() {
+    setTab("attack");
+    setPrompt("");
+    setNavOpen(false);
+    requestAnimationFrame(() => inputRef.current?.focus());
+  }
+
+  const tried = feed?.per_target?.[target] ?? 0;
+  const broken = feed?.totals[`leaks_${target}`] ?? 0;
 
   return (
-    <div className="page">
-      <header className="bar">
-        <a className="brand" href="/" aria-label="Guardrail Arena, về đầu trang">
-          <Image src="/logo.png" alt="" width={36} height={36} priority />
+    <div className="frame">
+      {navOpen && <button className="scrim" aria-label="Đóng menu" onClick={() => setNavOpen(false)} />}
+      <aside className={`sidebar ${navOpen ? "open" : ""}`}>
+        <div className="side-brand">
+          <Image src="/logo.png" alt="" width={34} height={34} priority />
           <span>Guardrail Arena</span>
-        </a>
-        <span className={`conn ${online ? "" : "conn-off"}`}>
-          {online ? "Máy chủ đang mở" : "Mất kết nối, đang thử lại"}
-        </span>
-      </header>
+          <button className="icon-btn only-mobile" aria-label="Đóng menu" onClick={() => setNavOpen(false)}>
+            <X size={18} />
+          </button>
+        </div>
 
-      <div className="grid">
-        <main className="main">
-          <section className="intro">
-            <h1>Làm cho bot ngân hàng nói ra điều nó phải giữ kín.</h1>
-            <p>
-              Ba trợ lý của VinBank, một ngân hàng giả lập trong lab, đều thuộc lòng {" "}
-              {joinVi(SECRETS.map((s) => s.label))}. Viết một prompt khiến bot nhắc lại bất kỳ giá
-              trị nào trong số đó. Bot càng nhiều lớp bảo vệ, phá được càng nhiều điểm.
-            </p>
-          </section>
+        <button className="primary-btn" onClick={newPrompt}>
+          <PenLine size={16} /> Viết prompt mới
+        </button>
 
-          <section className="arena" aria-labelledby="target-heading">
-            <h2 id="target-heading" className="sr-only">
-              Chọn bot để tấn công
-            </h2>
+        <nav className="side-nav" aria-label="Chọn bot">
+          <span className="side-heading">Bot mục tiêu</span>
+          {TARGETS.map((t) => {
+            const Icon = t.icon;
+            return (
+              <button
+                key={t.id}
+                className={target === t.id ? "active" : ""}
+                aria-current={target === t.id ? "page" : undefined}
+                onClick={() => pick(t.id)}
+              >
+                <Icon size={17} />
+                <span className="nav-name">{t.name}</span>
+                <span className="nav-pts">+{t.points}</span>
+              </button>
+            );
+          })}
+        </nav>
+
+        <div className="side-top">
+          <span className="side-heading">Dẫn đầu</span>
+          {feed && feed.leaderboard.length > 0 ? (
+            <ol>
+              {feed.leaderboard.slice(0, 5).map((l, i) => (
+                <li key={l.nickname}>
+                  <span className="top-rank">{i + 1}</span>
+                  <span className="top-name">{l.nickname}</span>
+                  <span className="top-pts">{l.points}</span>
+                </li>
+              ))}
+            </ol>
+          ) : (
+            <p className="side-empty">Chưa ai ghi điểm.</p>
+          )}
+        </div>
+
+        <label className="profile">
+          <span className="avatar" aria-hidden>
+            {(nickname.trim()[0] ?? "?").toUpperCase()}
+          </span>
+          <span className="profile-text">
+            <span className="profile-hint">Tên của bạn trên bảng xếp hạng</span>
+            <input
+              value={nickname}
+              maxLength={24}
+              placeholder="Nhập nickname"
+              onChange={(e) => {
+                setNickname(e.target.value);
+                save("arena.nick", e.target.value);
+              }}
+            />
+          </span>
+        </label>
+      </aside>
+
+      <div className="shell">
+        <header className="topbar">
+          <button className="icon-btn only-mobile" aria-label="Mở menu" onClick={() => setNavOpen(true)}>
+            <Menu size={20} />
+          </button>
+          <h1>Tấn công bot ngân hàng</h1>
+          <span className={`conn ${online ? "" : "off"}`}>{online ? "Máy chủ đang mở" : "Mất kết nối"}</span>
+        </header>
+
+        <div className="scroll">
+          <section className="case">
+            <div className="case-head">
+              <div className="case-title">
+                <h2>{current.name}</h2>
+                <span className="level">{current.level}</span>
+              </div>
+              <dl className="facts">
+                <div>
+                  <dt>Model</dt>
+                  <dd>{current.model}</dd>
+                </div>
+                <div>
+                  <dt>Lớp phòng thủ</dt>
+                  <dd>{current.gates.filter((g) => !g.model).length}</dd>
+                </div>
+                <div>
+                  <dt>Điểm mỗi bí mật</dt>
+                  <dd>+{current.points}</dd>
+                </div>
+                <div>
+                  <dt>Bị phá</dt>
+                  <dd className={broken > 0 ? "hot" : ""}>
+                    {broken} / {tried} lượt
+                  </dd>
+                </div>
+              </dl>
+            </div>
             <div className="tabs" role="tablist">
-              {TARGETS.map((t) => (
+              {TABS.map((t) => (
                 <button
                   key={t.id}
                   role="tab"
-                  aria-selected={target === t.id}
-                  className={`tab tab-${t.id}`}
-                  onClick={() => pick(t.id)}
+                  aria-selected={tab === t.id}
+                  className={tab === t.id ? "on" : ""}
+                  onClick={() => setTab(t.id)}
                 >
-                  <span className="tab-name">{t.name}</span>
-                  <span className="tab-points">+{t.points} điểm mỗi bí mật</span>
+                  {t.label}
+                  {t.id === "mine" && mine.length > 0 && <span className="count-tag">{mine.length}</span>}
                 </button>
               ))}
             </div>
+          </section>
 
-            <div className="target-about">
-              <p>{current.about}</p>
-              <span className="model">Chạy trên {current.model}</span>
-            </div>
+          {tab === "attack" && (
+            <div className="board-grid">
+              <section className="panel info">
+                <h3>Thông tin</h3>
+                <p className="info-about">{current.about}</p>
+                <dl className="kv">
+                  <div>
+                    <dt>Bí mật cần lấy</dt>
+                    <dd>3</dd>
+                  </div>
+                  {SECRETS.map((s) => (
+                    <div key={s.id}>
+                      <dt>{s.label}</dt>
+                      <dd className={cracked.has(`${target}:${s.id}`) ? "got" : "locked"}>
+                        {cracked.has(`${target}:${s.id}`) ? "Bạn đã lấy" : "Chưa lấy"}
+                      </dd>
+                    </div>
+                  ))}
+                  <div>
+                    <dt>Điểm của bạn</dt>
+                    <dd>{myPoints}</dd>
+                  </div>
+                </dl>
+              </section>
 
-            <Track target={current} attempt={latest} />
+              <section className="panel">
+                <div className="panel-head">
+                  <h3>Đường đi của prompt</h3>
+                  <Legend />
+                </div>
+                <Track target={current} attempt={latest} />
+              </section>
 
-            <div className="composer">
-              <textarea
-                ref={inputRef}
-                value={prompt}
-                maxLength={maxPrompt}
-                rows={6}
-                aria-label={`Prompt gửi tới ${current.name}`}
-                placeholder={`Viết prompt gửi tới ${current.name}. Nhấn Ctrl hoặc ⌘ cùng Enter để gửi.`}
-                onChange={(e) => setPrompt(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-                    e.preventDefault();
-                    submit();
-                  }
-                }}
-              />
-              <div className="starters">
-                <span className="starters-label">Chưa có ý tưởng? Bắt đầu từ:</span>
-                {STARTERS.map((s) => (
-                  <button
-                    key={s.label}
-                    className="starter"
-                    onClick={() => {
-                      setPrompt(s.text);
-                      inputRef.current?.focus();
-                    }}
-                  >
-                    {s.label}
+              <section className="panel composer wide">
+                <textarea
+                  ref={inputRef}
+                  value={prompt}
+                  maxLength={maxPrompt}
+                  rows={6}
+                  aria-label={`Prompt gửi tới ${current.name}`}
+                  placeholder={`Viết prompt gửi tới ${current.name}. Nhấn Ctrl hoặc ⌘ cùng Enter để gửi.`}
+                  onChange={(e) => setPrompt(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+                      e.preventDefault();
+                      submit();
+                    }
+                  }}
+                />
+                <div className="composer-foot">
+                  <div className="starters">
+                    <span>Bắt đầu từ:</span>
+                    {STARTERS.map((s) => (
+                      <button
+                        key={s.label}
+                        onClick={() => {
+                          setPrompt(s.text);
+                          inputRef.current?.focus();
+                        }}
+                      >
+                        {s.label}
+                      </button>
+                    ))}
+                  </div>
+                  <span className="chars">
+                    {prompt.length.toLocaleString("vi-VN")} / {maxPrompt.toLocaleString("vi-VN")}
+                  </span>
+                  <button className="primary-btn send" onClick={submit} disabled={busy || !prompt.trim() || !ready}>
+                    {busy && <Loader2 size={16} className="spin" aria-hidden />}
+                    {busy ? "Đang gửi" : ready ? `Gửi tới ${current.name}` : "Bot đang khởi động"}
                   </button>
-                ))}
-              </div>
-              <div className="send-row">
-                <label className="nick">
-                  <span>Tên trên bảng xếp hạng</span>
-                  <input
-                    value={nickname}
-                    maxLength={24}
-                    placeholder="Ẩn danh"
-                    onChange={(e) => {
-                      setNickname(e.target.value);
-                      save("arena.nick", e.target.value);
-                    }}
-                  />
-                </label>
-                <span className="count">
-                  {prompt.length.toLocaleString("vi-VN")} / {maxPrompt.toLocaleString("vi-VN")}
-                </span>
-                <button className="send" onClick={submit} disabled={busy || !prompt.trim() || !ready}>
-                  {busy && <Loader2 size={16} className="spin" aria-hidden />}
-                  {busy ? "Đang gửi" : ready ? `Gửi tới ${current.name}` : "Bot đang khởi động"}
-                </button>
-              </div>
-              {error && (
-                <p className="error" role="alert">
-                  {error}
-                </p>
+                </div>
+                {error && (
+                  <p className="error" role="alert">
+                    {error}
+                  </p>
+                )}
+                {health && (
+                  <p className="fine">
+                    Mỗi người được {health.limits.per_minute} lượt mỗi phút và {health.limits.per_hour} lượt mỗi
+                    giờ. Prompt của bạn sẽ hiện ở tab Trực tiếp, các giá trị bí mật được che đi.
+                  </p>
+                )}
+              </section>
+
+              {latest && (
+                <section className="panel wide">
+                  <h3>Kết quả gần nhất</h3>
+                  <AttemptRow a={latest} />
+                </section>
               )}
             </div>
-          </section>
+          )}
 
-          <section className="history" aria-labelledby="history-heading">
-            <h2 id="history-heading">Lượt của bạn</h2>
-            {mine.length === 0 ? (
-              <p className="quiet">
-                Chưa gửi lượt nào. Red không có lớp lọc nên là chỗ tốt để thử trước.
-              </p>
-            ) : (
-              <ol className="attempts">
-                {mine.map((a) => (
-                  <AttemptRow key={a.id} a={a} />
-                ))}
-              </ol>
-            )}
-          </section>
-        </main>
-
-        <aside className="side">
-          <section className="panel">
-            <h2>Bạn đã lấy được</h2>
-            <table className="progress">
-              <thead>
-                <tr>
-                  <th scope="col">
-                    <span className="sr-only">Bí mật</span>
-                  </th>
-                  {TARGETS.map((t) => (
-                    <th key={t.id} scope="col">
-                      {t.name}
-                    </th>
+          {tab === "mine" && (
+            <section className="panel">
+              <h3>Lượt của bạn</h3>
+              {mine.length === 0 ? (
+                <p className="empty">Chưa gửi lượt nào. Red không có lớp lọc nên là chỗ tốt để thử trước.</p>
+              ) : (
+                <ol className="attempts">
+                  {mine.map((a) => (
+                    <li key={a.id}>
+                      <AttemptRow a={a} />
+                    </li>
                   ))}
-                </tr>
-              </thead>
-              <tbody>
-                {SECRETS.map((s) => (
-                  <tr key={s.id}>
-                    <th scope="row">{s.label}</th>
-                    {TARGETS.map((t) => {
-                      const got = cracked.has(`${t.id}:${s.id}`);
-                      return (
-                        <td key={t.id}>
-                          <span
-                            className={`cell ${got ? "cell-got" : ""}`}
-                            aria-label={got ? "đã lấy" : "chưa lấy"}
-                          />
-                        </td>
-                      );
-                    })}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            <p className="points">
-              <strong>{myPoints}</strong> điểm trên thiết bị này
-            </p>
-          </section>
+                </ol>
+              )}
+            </section>
+          )}
 
-          <section className="panel">
-            <h2>Bảng xếp hạng</h2>
-            {feed && feed.leaderboard.length > 0 ? (
-              <ol className="board">
-                {feed.leaderboard.map((l, i) => (
-                  <li key={l.nickname} className={l.nickname === nickname.trim() ? "me" : ""}>
-                    <span className="rank">{i + 1}</span>
-                    <span className="who">{l.nickname}</span>
-                    <span className="marks" aria-label={`Đã phá ${l.targets.map((t) => BY_ID[t].name).join(", ")}`}>
-                      {TARGETS.map((t) => (
-                        <span key={t.id} className={`mark ${l.targets.includes(t.id) ? `mark-${t.id}` : ""}`} />
+          {tab === "live" && (
+            <div className="board-grid">
+              <section className="panel">
+                <div className="panel-head">
+                  <h3>Prompt bị chặn ở đâu</h3>
+                  <span className="muted">{current.name}</span>
+                </div>
+                <Outcomes target={current} counts={feed?.outcomes?.[target] ?? {}} />
+              </section>
+              <section className="panel">
+                <div className="panel-head">
+                  <h3>Đang diễn ra</h3>
+                  <Activity size={16} className="muted" />
+                </div>
+                {feed && feed.totals.attempts > 0 && (
+                  <p className="tally">
+                    {feed.totals.attempts.toLocaleString("vi-VN")} lượt tấn công, {feed.totals.leaks} lần lộ bí mật.
+                  </p>
+                )}
+                <ol className="feed">
+                  {(feed?.feed ?? []).map((a) => {
+                    const d = describe(a);
+                    return (
+                      <li key={a.id} className={`tone-${d.tone}`}>
+                        <p>
+                          <strong>{a.nickname}</strong> {d.lead}
+                        </p>
+                        <p className="feed-prompt">{a.prompt}</p>
+                        <time dateTime={a.ts}>{ago(a.ts)}</time>
+                      </li>
+                    );
+                  })}
+                </ol>
+                {feed && feed.feed.length === 0 && <p className="empty">Chưa có ai gửi prompt.</p>}
+              </section>
+            </div>
+          )}
+
+          {tab === "board" && (
+            <div className="board-grid">
+              <section className="panel">
+                <div className="panel-head">
+                  <h3>Bảng xếp hạng</h3>
+                  <Trophy size={16} className="muted" />
+                </div>
+                {feed && feed.leaderboard.length > 0 ? (
+                  <table className="ranking">
+                    <thead>
+                      <tr>
+                        <th scope="col">Hạng</th>
+                        <th scope="col">Người chơi</th>
+                        <th scope="col">Đã phá</th>
+                        <th scope="col">Lượt</th>
+                        <th scope="col">Điểm</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {feed.leaderboard.map((l, i) => (
+                        <tr key={l.nickname} className={l.nickname === nickname.trim() ? "me" : ""}>
+                          <td>{i + 1}</td>
+                          <td className="strong">{l.nickname}</td>
+                          <td>{l.targets.map((t) => BY_ID[t].name).join(", ")}</td>
+                          <td>{l.attempts}</td>
+                          <td className="strong">{l.points}</td>
+                        </tr>
                       ))}
-                    </span>
-                    <span className="score">{l.points}</span>
-                  </li>
-                ))}
-              </ol>
-            ) : (
-              <p className="quiet">Chưa ai lấy được bí mật nào. Vị trí số một còn trống.</p>
-            )}
-          </section>
+                    </tbody>
+                  </table>
+                ) : (
+                  <p className="empty">Chưa ai lấy được bí mật nào. Vị trí số một còn trống.</p>
+                )}
+              </section>
+              <section className="panel">
+                <div className="panel-head">
+                  <h3>Bạn đã lấy được</h3>
+                  <ListChecks size={16} className="muted" />
+                </div>
+                <table className="matrix">
+                  <thead>
+                    <tr>
+                      <th scope="col">
+                        <span className="sr-only">Bí mật</span>
+                      </th>
+                      {TARGETS.map((t) => (
+                        <th key={t.id} scope="col">
+                          {t.name}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {SECRETS.map((s) => (
+                      <tr key={s.id}>
+                        <th scope="row">{s.label}</th>
+                        {TARGETS.map((t) => {
+                          const got = cracked.has(`${t.id}:${s.id}`);
+                          return (
+                            <td key={t.id}>
+                              <span className={`cell ${got ? "got" : ""}`} aria-label={got ? "đã lấy" : "chưa lấy"} />
+                            </td>
+                          );
+                        })}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                <p className="fine">Tổng {myPoints} điểm trên thiết bị này.</p>
+              </section>
+            </div>
+          )}
 
-          <section className="panel live">
-            <h2>Đang diễn ra</h2>
-            {totals && totals.attempts > 0 && (
-              <p className="tally">
-                {totals.attempts.toLocaleString("vi-VN")} lượt tấn công, {totals.leaks} lần lộ bí mật
-                {totals.leaks_red_advance > 0 ? `, trong đó ${totals.leaks_red_advance} lần phá được Red Advance` : ""}.
-              </p>
-            )}
-            <ol className="feed">
-              {(feed?.feed ?? []).map((a) => {
-                const d = describe(a);
-                return (
-                  <li key={a.id} className={`feed-${d.tone}`}>
-                    <p className="feed-line">
-                      <strong>{a.nickname}</strong> {d.lead}
-                    </p>
-                    <p className="feed-prompt">{a.prompt}</p>
-                    <time className="feed-time" dateTime={a.ts}>
-                      {ago(a.ts)}
-                    </time>
-                  </li>
-                );
-              })}
-            </ol>
-            {feed && feed.feed.length === 0 && <p className="quiet">Chưa có ai gửi prompt.</p>}
-          </section>
-        </aside>
+          <p className="foot">
+            Bài lab Day 11 về guardrails và AI có trách nhiệm. Bí mật trên trang là dữ liệu giả, bot không nối với hệ
+            thống ngân hàng nào.
+          </p>
+        </div>
       </div>
-
-      <footer className="foot">
-        Bài lab Day 11 về guardrails và AI có trách nhiệm. Mọi bí mật trên trang là dữ liệu giả, bot
-        không nối với hệ thống ngân hàng nào.
-      </footer>
     </div>
+  );
+}
+
+function Legend() {
+  return (
+    <ul className="legend">
+      <li className="lg-pass">Đi qua</li>
+      <li className="lg-block">Bị chặn</li>
+      <li className="lg-leak">Lộ bí mật</li>
+    </ul>
+  );
+}
+
+function Outcomes({ target, counts }: { target: Target; counts: Record<string, number> }) {
+  const rows = [
+    ...target.gates.map((g) => ({
+      id: g.id,
+      label: g.model ? "Model tự từ chối" : g.label,
+      value: g.layers.reduce((s, l) => s + (counts[l] ?? 0), 0),
+      tone: g.model ? "refuse" : "block",
+    })),
+    { id: "passed", label: "Trả lời, không lộ", value: counts.passed ?? 0, tone: "none" },
+    { id: "leaked", label: "Lộ bí mật", value: counts.leaked ?? 0, tone: "leak" },
+  ];
+  const total = rows.reduce((s, r) => s + r.value, 0);
+  if (total === 0) return <p className="empty">Chưa có lượt nào gửi tới {target.name}.</p>;
+  const max = Math.max(...rows.map((r) => r.value));
+  return (
+    <ul className="bars">
+      {rows.map((r) => (
+        <li key={r.id}>
+          <span className="bar-label">{r.label}</span>
+          <span className="bar-track">
+            <span className={`bar bar-${r.tone}`} style={{ width: `${(r.value / max) * 100}%` }} />
+          </span>
+          <span className="bar-value">{r.value}</span>
+        </li>
+      ))}
+    </ul>
   );
 }
 
 function Track({ target, attempt }: { target: Target; attempt: Attempt | null }) {
   const nodes = [
-    { id: "start", label: "Prompt của bạn", kind: "end" as const, layers: [] as string[] },
+    { id: "start", label: "Prompt", kind: "end" as const, layers: [] as string[] },
     ...target.gates.map((g) => ({ ...g, kind: g.model ? ("model" as const) : ("gate" as const) })),
     { id: "finish", label: "Câu trả lời", kind: "end" as const, layers: [] as string[] },
   ];
   const leaked = attempt?.verdict === "leaked";
   const stopIdx = attempt ? nodes.findIndex((n) => attempt.layer && n.layers.includes(attempt.layer)) : -1;
-  // Index of the furthest node the prompt reached.
   const reached = !attempt ? -1 : stopIdx === -1 || leaked ? nodes.length - 1 : stopIdx;
 
   let caption = "Gửi một prompt để xem nó đi được tới đâu.";
   if (attempt) {
-    if (leaked) caption = `Lọt qua mọi lớp. Bot đã nói ra ${joinVi(attempt.leaked_ids.map((id) => SECRET_LABEL[id] ?? id))}.`;
-    else if (attempt.verdict === "blocked") caption = `Lượt gần nhất dừng ở bước ${nodes[stopIdx]?.label.toLowerCase() ?? "lọc"}.`;
+    if (leaked)
+      caption = `Lọt qua mọi lớp. Bot đã nói ra ${joinVi(attempt.leaked_ids.map((id) => SECRET_LABEL[id] ?? id))}.`;
+    else if (attempt.verdict === "blocked")
+      caption = `Lượt gần nhất dừng ở bước ${nodes[stopIdx]?.label.toLowerCase() ?? "lọc"}.`;
     else if (attempt.verdict === "refused") caption = "Lọt qua các lớp lọc, nhưng model tự từ chối.";
     else caption = "Bot trả lời bình thường, không lộ bí mật nào.";
   }
@@ -484,8 +695,8 @@ function Track({ target, attempt }: { target: Target; attempt: Attempt | null })
         {nodes.map((n, i) => {
           let state = "";
           if (attempt) {
-            if (i === stopIdx && !leaked && attempt.verdict !== "refused") state = "stop";
-            else if (i === stopIdx && attempt.verdict === "refused") state = "refuse";
+            if (i === stopIdx && attempt.verdict === "refused") state = "refuse";
+            else if (i === stopIdx && !leaked) state = "stop";
             else if (i <= reached) state = leaked ? "leak" : "pass";
             else state = "after";
           }
@@ -509,16 +720,16 @@ function Track({ target, attempt }: { target: Target; attempt: Attempt | null })
 function AttemptRow({ a }: { a: Attempt }) {
   const d = describe(a);
   return (
-    <li className={`attempt attempt-${d.tone}`}>
+    <article className={`attempt tone-${d.tone}`}>
       <div className="attempt-head">
         <span className="attempt-verdict">Bạn {d.lead}</span>
-        <span className="attempt-time">{(a.latency_ms / 1000).toFixed(1)} giây</span>
+        <span className="muted">{(a.latency_ms / 1000).toFixed(1)} giây</span>
       </div>
       <p className="attempt-prompt">{a.prompt}</p>
       <div className="reply">
         <span className="reply-who">{BY_ID[a.target]?.name} trả lời</span>
         <p>{a.reply ?? a.reply_preview}</p>
       </div>
-    </li>
+    </article>
   );
 }
