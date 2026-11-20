@@ -103,8 +103,11 @@ def get_blue_provider() -> str:
     return BLUE_PROVIDER
 
 
-def get_blue_model() -> str:
-    # Hard-locked; env cannot override for the graded Blue Team path.
+def get_blue_model(provider: str = BLUE_PROVIDER) -> str:
+    if provider == "liquid":
+        return "lfm3-1.7b"
+    if provider != BLUE_PROVIDER:
+        raise ValueError(f"Unsupported Blue provider: {provider}")
     return BLUE_MODEL
 
 
@@ -112,8 +115,13 @@ def get_openrouter_api_key() -> str:
     return os.environ.get("OPENROUTER_API_KEY", "").strip()
 
 
-def blue_client_kwargs() -> dict:
-    """OpenAI SDK kwargs pointing at OpenRouter (Blue Team only)."""
+def blue_client_kwargs(provider: str = BLUE_PROVIDER) -> dict:
+    """Keep each credential scoped to its own provider."""
+    if provider == "liquid":
+        key = os.environ.get("LIQUID_API_KEY", "").strip()
+        if not key:
+            raise ValueError("Set LIQUID_API_KEY in .env for a direct Liquid run")
+        return {"api_key": key, "base_url": "https://api.liquid.ai/openai/v1"}
     return {
         "api_key": get_openrouter_api_key() or None,
         "base_url": (
@@ -123,8 +131,8 @@ def blue_client_kwargs() -> dict:
     }
 
 
-def blue_provider_label() -> str:
-    return f"{get_blue_provider()}:{get_blue_model()}"
+def blue_provider_label(provider: str = BLUE_PROVIDER) -> str:
+    return f"{provider}:{get_blue_model(provider)}"
 
 
 # ---------------------------------------------------------------------------
@@ -234,13 +242,16 @@ def is_harder_model() -> bool:
     return any(x in m for x in ("gpt-5.6", "pro", "gemini-3.8", "gemini-3.7"))
 
 
-def setup_api_key():
+def setup_api_key(*, blue=True, red=True, blue_provider=BLUE_PROVIDER):
     """Ensure keys for Blue (OpenRouter) + Red / Red Advance (OpenAI or Gemini)."""
-    if not get_openrouter_api_key():
+    if blue and blue_provider == PROVIDER_OPENROUTER and not get_openrouter_api_key():
         os.environ["OPENROUTER_API_KEY"] = input(
             "Enter OpenRouter API Key (Blue): "
         ).strip()
-    print(f"Blue  — {blue_provider_label()}  [LOCKED]")
+    if blue:
+        print(f"Blue  — {blue_provider_label(blue_provider)}")
+    if not red:
+        return
 
     red = get_red_provider()
     model = get_red_model()
